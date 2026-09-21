@@ -7,11 +7,11 @@ import assert from 'node:assert/strict';
 import { resolveFullConfig, DEFAULT_TRIP_CODES } from '../src/index.ts';
 
 describe('defaults encode the live-tuned policy', () => {
-  it('threshold 1, hour cooldown, 15m window, cap 5', () => {
+  it('threshold 1, short base cooldown, 15m window, cap 5', () => {
     const resolved = resolveFullConfig(undefined);
     assert.equal(resolved.enabled, true);
     assert.equal(resolved.modelCircuitThreshold, 1);
-    assert.equal(resolved.modelCooldownMs, 3_600_000);
+    assert.equal(resolved.modelCooldownMs, 300_000);
     assert.equal(resolved.burstWindowMs, 900_000);
     assert.equal(resolved.maxSwitchesPerStep, 5);
     assert.deepEqual(resolved.fallbacks, []);

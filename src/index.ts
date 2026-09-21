@@ -102,7 +102,7 @@ export const Config = z.object({
   fallbacks: z.array(routeSchema).default([]),
   tripCodes: z.array(z.string()).default([...DEFAULT_TRIP_CODES]),
   modelCircuitThreshold: z.number().min(1).default(1),
-  modelCooldownMs: z.number().min(0).default(3_600_000),
+  modelCooldownMs: z.number().min(0).default(300_000),
   platformCircuitThreshold: z.number().min(1).default(2),
   platformCooldownMs: z.number().min(0).default(120_000),
   burstWindowMs: z.number().min(1).default(900_000),
@@ -156,7 +156,10 @@ export function resolveFullConfig(section: Record<string, unknown> | undefined):
     fallbacks,
     tripCodes: tripCodes.length === 0 ? [...DEFAULT_TRIP_CODES] : tripCodes,
     modelCircuitThreshold: Math.max(1, Math.floor(num(value['modelCircuitThreshold'], 1))),
-    modelCooldownMs: num(value['modelCooldownMs'], 3_600_000),
+    // 5min base: hour holds froze the fleet after short storms (21.09). Real
+    // hour-long outages still hold via per-failure Retry-After (recordFailure
+    // takes max(cooldown, retryAfterMs)), so a short base loses nothing.
+    modelCooldownMs: num(value['modelCooldownMs'], 300_000),
     platformCircuitThreshold: Math.max(1, Math.floor(num(value['platformCircuitThreshold'], 2))),
     platformCooldownMs: num(value['platformCooldownMs'], 120_000),
     burstWindowMs: Math.max(1, num(value['burstWindowMs'], 900_000)),
