@@ -1,0 +1,8 @@
+# Bundle patch: inserts the unified failover-continue plugin row.
+# Install with: dsh plugin --profile web add link:D:/AI/rovodev/dsh-failover-continue
+# (or file:/github: source). Replaces the pair
+# `dsh-client-auto-continue` + `dsh-model-failover-settings`: disable both rows
+# in the profile patch when this one is active — exactly one owner per waterfall.
+- insert:
+    - id: failover-continue
+      name: 'dsh-failover-continue'
