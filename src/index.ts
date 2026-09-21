@@ -273,7 +273,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (seen !== undefined) return seen;
     if (!homeLogged) {
       homeLogged = true;
-      ctx.logger.warn('[dsh-failover-continue] agent-default-model unreadable, home falls back to first-seen primary');
+      ctx.logger.warn('[dsh-failover-continue] agent-default-model unreadable and no first-seen route, home=primary (revert inert)');
     }
     return primary;
   };
@@ -398,8 +398,10 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     const base = await next();
     if (!resolved.enabled || resolved.fallbacks.length === 0) return base;
     const primary: FallbackRoute = { provider: base.provider, model: base.model };
-    if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
+    // Home is resolved BEFORE firstSeen is recorded: otherwise the fallback
+    // poisons itself (firstSeen === primary → home can never differ).
     const home = homeRoute(payload.agent, primary);
+    if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
     const homeKey = modelKey(home.provider, home.model);
     const primaryKey = modelKey(primary.provider, primary.model);
     // Revert: anyone sitting off-home (failover leftover, pre-restart
