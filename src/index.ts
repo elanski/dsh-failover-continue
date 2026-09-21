@@ -239,8 +239,26 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     burstWindowMs: resolved.burstWindowMs,
   });
   const attempts = new WeakMap<Agent, Map<string, Attempt>>();
+  /** Sessions I diverted away from home: eligible for revert once home is healthy. */
+  const diverted = new WeakSet<Agent>();
 
   const currentFallbacks = (): FallbackRoute[] => resolved.fallbacks;
+
+  /** Session default route (revert target). Falls back to first-seen primary. */
+  const homeRoute = (agent: Agent, primary: FallbackRoute): FallbackRoute => {
+    try {
+      const svc = settingsService(ctx);
+      const home = svc?.get?.('agent-default-model') as { provider?: unknown; model?: unknown } | undefined;
+      if (typeof home?.provider === 'string' && typeof home?.model === 'string'
+        && home.provider !== '' && home.model !== '') {
+        return { provider: home.provider, model: home.model };
+      }
+    } catch {
+      // fall through to first-seen primary
+    }
+    void agent;
+    return primary;
+  };
 
   const continuable = (failure: FailureFacts): boolean => {
     if (!resolved.enabled) return false;
@@ -362,6 +380,23 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     const base = await next();
     if (!resolved.enabled || resolved.fallbacks.length === 0) return base;
     const primary: FallbackRoute = { provider: base.provider, model: base.model };
+    const home = homeRoute(payload.agent, primary);
+    const homeKey = modelKey(home.provider, home.model);
+    const primaryKey = modelKey(primary.provider, primary.model);
+    // Revert: a session I diverted goes home as soon as home is healthy.
+    // Manual picker choices never set the flag, so they are never reverted.
+    if (diverted.has(payload.agent) && homeKey !== primaryKey && !breaker.isOpen(home.provider, home.model)) {
+      diverted.delete(payload.agent);
+      ctx.logger.warn(
+        '[dsh-failover-continue] %s: %s/%s recovered, reverting to %s/%s',
+        payload.agent.id, primary.provider, primary.model, home.provider, home.model,
+      );
+      notifySwitch(payload.agent, primary, home);
+      const { reasoningEffort, ...rest } = base as LlmCallConfig & { reasoningEffort?: unknown };
+      void reasoningEffort;
+      return { ...rest, provider: home.provider, model: home.model };
+    }
+    if (homeKey === primaryKey) diverted.delete(payload.agent);
     const entries = entriesOf(payload.agent);
     const key = attemptKey(payload.turn, payload.step);
     let attempt = entries.get(key);
@@ -421,6 +456,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
       if (to === undefined) return downstream;
       attempt.swaps += 1;
       attempt.current = to;
+      markDiverted(payload.agent, from, to);
       notifySwitch(payload.agent, from, to);
       return { kind: 'retry' };
     }
@@ -436,9 +472,19 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (to.provider === from.provider && to.model === from.model) return downstream;
     attempt.swaps += 1;
     attempt.current = to;
+    markDiverted(payload.agent, from, to);
     notifySwitch(payload.agent, from, to);
     return { kind: 'retry' };
   });
+
+  function markDiverted(agent: Agent, from: FallbackRoute, to: FallbackRoute): void {
+    const home = homeRoute(agent, from);
+    if (modelKey(to.provider, to.model) !== modelKey(home.provider, home.model)) {
+      diverted.add(agent);
+    } else {
+      diverted.delete(agent);
+    }
+  }
 
   function notifySwitch(agent: Agent, from: FallbackRoute, to: FallbackRoute): void {
     try {
