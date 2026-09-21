@@ -53,6 +53,7 @@ export function apply(ctx: ClientContext): void {
     // Older locale runtime: the ru dictionary still registers below and the
     // card falls back to English copy.
   }
+  try {
   // The rc type surface only knows en|zh; `ru` becomes valid at runtime via
   // addLanguage() above (live hosts accept it). Cast keeps one build portable.
   ctx.effect(
@@ -88,4 +89,11 @@ export function apply(ctx: ClientContext): void {
     // `hooks.card` reaches the component as the `useCard` prop.
     inject: () => ({ hooks: { card: model.store }, ...actions }),
   }, FailoverContinueCard))
+  } catch (error) {
+    // Never break the settings page: report to the browser console instead.
+    console.error(
+      '[dsh-failover-continue] card registration failed:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
