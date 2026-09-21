@@ -402,6 +402,17 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     // poisons itself (firstSeen === primary → home can never differ).
     const home = homeRoute(payload.agent, primary);
     if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
+    // TEMP-DIAG(0.1.9): per-request routing trace, remove after Luna-stuck diagnosis.
+    try {
+      ctx.logger.warn(
+        '[dsh-failover-continue] route t%d/s%d base=%s/%s home=%s/%s open=%s diverted=%s',
+        payload.turn, payload.step,
+        primary.provider, primary.model,
+        home.provider, home.model,
+        breaker.isOpen(home.provider, home.model) ? 'Y' : 'n',
+        reverted.has(payload.agent) ? 'Y' : 'n',
+      );
+    } catch { /* logging must never break routing */ }
     const homeKey = modelKey(home.provider, home.model);
     const primaryKey = modelKey(primary.provider, primary.model);
     // Revert: anyone sitting off-home (failover leftover, pre-restart
