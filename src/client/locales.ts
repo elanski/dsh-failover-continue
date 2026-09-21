@@ -44,6 +44,8 @@ export interface FailoverContinueLocale {
   backoffMaxMs: string
   notify: string
   paused: string
+  locale: string
+  localeHint: string
   loopGuard: string
   loopShortChars: string
   loopWindowMs: string
@@ -107,6 +109,8 @@ export const en: FailoverContinueLocale = {
   backoffMaxMs: 'Backoff cap (ms)',
   notify: 'Browser notifications',
   paused: 'Pause auto-continue',
+  locale: 'Language',
+  localeHint: 'Notice language and default texts (ru/en). Card chrome follows the DSH interface language.',
   loopGuard: 'Loop guard',
   loopShortChars: 'Short message chars',
   loopWindowMs: 'Loop window (ms)',
@@ -170,6 +174,8 @@ export const ru: FailoverContinueLocale = {
   backoffMaxMs: 'Потолок бэкоффа (мс)',
   notify: 'Уведомления браузера',
   paused: 'Пауза автопродолжения',
+  locale: 'Язык',
+  localeHint: 'Язык уведомлений и дефолтных текстов (ru/en). Сама карточка идёт за языком интерфейса DSH.',
   loopGuard: 'Сторож зацикливаний',
   loopShortChars: 'Символов «короткого» сообщения',
   loopWindowMs: 'Окно зацикливания (мс)',

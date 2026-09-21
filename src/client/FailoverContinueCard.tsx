@@ -53,7 +53,7 @@ export const TOGGLE_FIELDS = ['enabled', 'scanOnBoot', 'classify', 'notify', 'pa
 export type ToggleField = (typeof TOGGLE_FIELDS)[number]
 
 /** Free-text fields. */
-export const TEXT_FIELDS = ['continueText', 'retryableErrorPatterns'] as const
+export const TEXT_FIELDS = ['locale', 'continueText', 'retryableErrorPatterns'] as const
 export type TextField = (typeof TEXT_FIELDS)[number]
 
 /** The settings section this card edits (resolved host value shape). */
@@ -143,6 +143,7 @@ export interface CardState {
   fallbacksOverridden: boolean
   tripCodes: string
   tripCodesOverridden: boolean
+  locale: string
   continueText: string
   continueTextOverridden: boolean
   retryableErrorPatterns: string
@@ -318,6 +319,9 @@ export class FailoverContinueCardModel {
       fallbacksOverridden: this.overridden('fallbacks'),
       tripCodes: this.tripCodesText(),
       tripCodesOverridden: this.overridden('tripCodes'),
+      locale: typeof this.shown('locale') === 'string' && (this.shown('locale') as string).trim() !== ''
+        ? (this.shown('locale') as string)
+        : 'ru',
       continueText: this.textValue('continueText'),
       continueTextOverridden: this.overridden('continueText'),
       retryableErrorPatterns: this.textValue('retryableErrorPatterns'),
@@ -654,6 +658,18 @@ export function FailoverContinueCard({ t, useCard, ...actions }: Props) {
 
           <div className={styles.row}>
             <span className={styles.label}>{t('continueSection')}</span>
+            <label>
+              <span className={styles.label}>{t('locale')}: </span>
+              <select
+                value={state.locale}
+                disabled={disabled}
+                onChange={event => actions.editText('locale', event.target.value)}
+              >
+                <option value="ru">Русский</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <p className={styles.hint}>{t('localeHint')}</p>
             <label>
               <input
                 type="checkbox"
