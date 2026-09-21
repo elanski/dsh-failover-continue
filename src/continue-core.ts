@@ -264,9 +264,17 @@ export function isTransientFailure(failure: FailureFacts, retryableErrorPatterns
 }
 
 /**
- * host/agent-error 消息分类: 仅明确属于网络/传输类的临时错误才自动继续。
- * 其余(序列化失败、配置/宿主内部错误等)视为永久性——重试无益, 且用户停止导致的
- * 序列化失败(如 Windows 下 abort 的 DOMException reason)绝不能自动续跑。
+ * Content-moderation refusal: the ROUTE is healthy, the PROMPT is not.
+ * Retrying elsewhere or parking the route is useless and harmful — surface it.
+ */
+export function isPolicyRefusal(message: string): boolean {
+  return /violating.{0,30}(usage )?policy|flagged as|potentially violat|moderation|content_policy|content-filter/i.test(
+    message,
+  );
+}
+/**
+ * host/agent-error message classification: only clear network/transport
+ * transient errors auto-continue; the rest counts as permanent.
  */
 export function isTransientAgentError(message: string): boolean {
   return /network|timeout|timed ?out|econn|etimedout|socket|5\d\d|\b429\b|upstream|temporar/i.test(message);

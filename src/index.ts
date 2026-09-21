@@ -32,6 +32,7 @@ import type {} from '@deepseek-ai/dsh-agent';
 import { CircuitBreaker, modelKey, revertDecision, type FallbackRoute } from './circuit.ts';
 import { AutoContinueRunner } from './continue-engine.ts';
 import {
+  isPolicyRefusal,
   resolveConfig,
   type AutoContinueConfig,
   type AutoContinueLocale,
@@ -269,6 +270,8 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
   const continuable = (failure: FailureFacts): boolean => {
     if (!resolved.enabled) return false;
     if (!resolved.tripCodes.includes(failure.code)) return false;
+    // Policy refusal: healthy route, bad prompt — never a reason to switch.
+    if (isPolicyRefusal(failure.message)) return false;
     // A healthy fallback anywhere means the next request either retries the
     // live primary or walks to a live route — worth continuing either way.
     // All-open chains stop here (stop-loss); maxConsecutive bounds the rest.
@@ -445,6 +448,8 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (!resolved.enabled) return downstream;
     const failure = payload.failure as LlmFailure & { providerRetryAfterMs?: number };
     if (!resolved.tripCodes.includes(failure.code)) return downstream;
+    // Policy refusal: healthy route, bad prompt. Surface it, don't park, don't walk.
+    if (isPolicyRefusal(failure.message)) return downstream;
     const attempt = entriesOf(payload.agent).get(attemptKey(payload.turn, payload.step));
     if (attempt === undefined) return downstream;
     const from = attempt.current;
