@@ -239,8 +239,14 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     burstWindowMs: resolved.burstWindowMs,
   });
   const attempts = new WeakMap<Agent, Map<string, Attempt>>();
-  /** Sessions I diverted away from home: eligible for revert once home is healthy. */
-  const diverted = new WeakSet<Agent>();
+  /**
+   * One-shot revert tickets. A session I divert (or one found off-home) gets
+   * a single automatic trip home once home is healthy; then the ticket is
+   * spent, so deliberate manual picks are fought at most once per diversion.
+   * In-memory by design: a stale ticket must never outlive the process that
+   * saw the diversion.
+   */
+  const reverted = new WeakSet<Agent>();
 
   const currentFallbacks = (): FallbackRoute[] => resolved.fallbacks;
 
@@ -383,12 +389,14 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     const home = homeRoute(payload.agent, primary);
     const homeKey = modelKey(home.provider, home.model);
     const primaryKey = modelKey(primary.provider, primary.model);
-    // Revert: a session I diverted goes home as soon as home is healthy.
-    // Manual picker choices never set the flag, so they are never reverted.
-    if (diverted.has(payload.agent) && homeKey !== primaryKey && !breaker.isOpen(home.provider, home.model)) {
-      diverted.delete(payload.agent);
+    // Revert: anyone sitting off-home (failover leftover, pre-restart
+    // diversion, last-resort camper) goes home as soon as home is healthy —
+    // once per diversion, so manual picker choices are never fought twice.
+    // The ticket is re-armed every time the breaker diverts (markDiverted).
+    if (homeKey !== primaryKey && !breaker.isOpen(home.provider, home.model) && !reverted.has(payload.agent)) {
+      reverted.add(payload.agent);
       ctx.logger.warn(
-        '[dsh-failover-continue] %s: %s/%s recovered, reverting to %s/%s',
+        '[dsh-failover-continue] %s: %s/%s off-home, reverting to %s/%s',
         payload.agent.id, primary.provider, primary.model, home.provider, home.model,
       );
       notifySwitch(payload.agent, primary, home);
@@ -396,7 +404,6 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
       void reasoningEffort;
       return { ...rest, provider: home.provider, model: home.model };
     }
-    if (homeKey === primaryKey) diverted.delete(payload.agent);
     const entries = entriesOf(payload.agent);
     const key = attemptKey(payload.turn, payload.step);
     let attempt = entries.get(key);
@@ -480,9 +487,8 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
   function markDiverted(agent: Agent, from: FallbackRoute, to: FallbackRoute): void {
     const home = homeRoute(agent, from);
     if (modelKey(to.provider, to.model) !== modelKey(home.provider, home.model)) {
-      diverted.add(agent);
-    } else {
-      diverted.delete(agent);
+      // Fresh diversion re-arms the one-shot trip home.
+      reverted.delete(agent);
     }
   }
 
