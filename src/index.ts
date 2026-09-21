@@ -273,7 +273,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (seen !== undefined) return seen;
     if (!homeLogged) {
       homeLogged = true;
-      ctx.logger.warn('[dsh-failover-continue] agent-default-model unreadable and no first-seen route, home=primary (revert inert)');
+      console.warn('[dsh-failover-continue] agent-default-model unreadable and no first-seen route, home=primary (revert inert)');
     }
     return primary;
   };
@@ -342,7 +342,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
         return true;
       }
     } catch (error) {
-      ctx.logger.debug('dsh-failover-continue: settings install deferred: %s', String(error));
+      console.info('dsh-failover-continue: settings install deferred: %s', String(error));
     }
     return false;
   };
@@ -404,7 +404,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
     // TEMP-DIAG(0.1.9): per-request routing trace, remove after Luna-stuck diagnosis.
     try {
-      ctx.logger.warn(
+      console.warn(
         '[dsh-failover-continue] route t%d/s%d base=%s/%s home=%s/%s open=%s diverted=%s',
         payload.turn, payload.step,
         primary.provider, primary.model,
@@ -421,7 +421,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     // The ticket is re-armed every time the breaker diverts (markDiverted).
     if (homeKey !== primaryKey && !breaker.isOpen(home.provider, home.model) && !reverted.has(payload.agent)) {
       reverted.add(payload.agent);
-      ctx.logger.warn(
+      console.warn(
         '[dsh-failover-continue] %s: %s/%s off-home, reverting to %s/%s',
         payload.agent.id, primary.provider, primary.model, home.provider, home.model,
       );
@@ -468,7 +468,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (attempt === undefined) return downstream;
     const from = attempt.current;
     if (attempt.swaps >= resolved.maxSwitchesPerStep) {
-      ctx.logger.warn(
+      console.warn(
         '[dsh-failover-continue] %s/%s switch cap (%d) hit, holding route',
         from.provider, from.model, resolved.maxSwitchesPerStep,
       );
@@ -495,7 +495,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     }
     const level = breaker.recordFailure(from.provider, from.model, failure.providerRetryAfterMs);
     if (level !== undefined) {
-      ctx.logger.warn(
+      console.warn(
         '[dsh-failover-continue] %s/%s circuit opened (%s) after %s: %s',
         from.provider, from.model, level, failure.code, failure.message,
       );
@@ -530,7 +530,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
         { surfaceOp: 'append' },
       );
     } catch (error) {
-      ctx.logger.warn('[dsh-failover-continue] switch notice dropped: %s', String(error));
+      console.warn('[dsh-failover-continue] switch notice dropped: %s', String(error));
     }
   }
 
