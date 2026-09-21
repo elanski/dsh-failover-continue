@@ -38,6 +38,8 @@ export const CONTINUE_NUMBERS = [
   'freshMs',
   'backoffFactor',
   'backoffMaxMs',
+  'idleNudgeAfterMs',
+  'idleNudgePerDay',
   'loopShortChars',
   'loopWindowMs',
   'loopShortCount',
@@ -54,7 +56,7 @@ export const TOGGLE_FIELDS = ['enabled', 'scanOnBoot', 'classify', 'notify', 'pa
 export type ToggleField = (typeof TOGGLE_FIELDS)[number]
 
 /** Free-text fields. */
-export const TEXT_FIELDS = ['locale', 'continueText', 'retryableErrorPatterns'] as const
+export const TEXT_FIELDS = ['locale', 'continueText', 'retryableErrorPatterns', 'idleWatchWorkspaces', 'idleNudgeText'] as const
 export type TextField = (typeof TEXT_FIELDS)[number]
 
 /** The settings section this card edits (resolved host value shape). */
@@ -80,6 +82,10 @@ export interface FailoverSection {
   retryableErrorPatterns?: string
   backoffFactor?: number
   backoffMaxMs?: number
+  idleWatchWorkspaces?: string
+  idleNudgeText?: string
+  idleNudgeAfterMs?: number
+  idleNudgePerDay?: number
   notify?: boolean
   paused?: boolean
   loopGuard?: boolean
@@ -149,6 +155,10 @@ export interface CardState {
   continueTextOverridden: boolean
   retryableErrorPatterns: string
   retryableErrorPatternsOverridden: boolean
+  idleWatchWorkspaces: string
+  idleWatchWorkspacesOverridden: boolean
+  idleNudgeText: string
+  idleNudgeTextOverridden: boolean
   providers: string[]
   modelsOf: Record<string, string[]>
   primary: string
@@ -327,6 +337,10 @@ export class FailoverContinueCardModel {
       continueTextOverridden: this.overridden('continueText'),
       retryableErrorPatterns: this.textValue('retryableErrorPatterns'),
       retryableErrorPatternsOverridden: this.overridden('retryableErrorPatterns'),
+      idleWatchWorkspaces: this.textValue('idleWatchWorkspaces'),
+      idleWatchWorkspacesOverridden: this.overridden('idleWatchWorkspaces'),
+      idleNudgeText: this.textValue('idleNudgeText'),
+      idleNudgeTextOverridden: this.overridden('idleNudgeText'),
       providers,
       modelsOf,
       primary: primaryValue?.provider !== undefined ? `${primaryValue.provider} / ${primaryValue.model ?? '?'}` : '—',
@@ -752,6 +766,43 @@ export function FailoverContinueCard({ t: hostT, useCard, ...actions }: Props) {
               value={state.retryableErrorPatterns}
               disabled={disabled}
               onChange={event => actions.editText('retryableErrorPatterns', event.target.value)}
+            />
+          </div>
+
+          <div className={styles.row}>
+            <span className={styles.label}>{t('idleWatch')}</span>
+            <p className={styles.hint}>{t('idleWatchHint')}</p>
+          </div>
+
+          <div className={styles.row}>
+            <FieldHead
+              label={t('idleWatchWorkspaces')}
+              hint={t('idleWatchWorkspacesHint')}
+              overridden={state.idleWatchWorkspacesOverridden}
+              onReset={() => actions.resetField('idleWatchWorkspaces')}
+              t={t}
+            />
+            <input
+              className={`${styles.input} ${styles.inputWide} ${styles.inputMono}`}
+              value={state.idleWatchWorkspaces}
+              disabled={disabled}
+              onChange={event => actions.editText('idleWatchWorkspaces', event.target.value)}
+            />
+          </div>
+
+          <div className={styles.row}>
+            <FieldHead
+              label={t('idleNudgeText')}
+              hint={t('idleNudgeTextHint')}
+              overridden={state.idleNudgeTextOverridden}
+              onReset={() => actions.resetField('idleNudgeText')}
+              t={t}
+            />
+            <input
+              className={`${styles.input} ${styles.inputWide}`}
+              value={state.idleNudgeText}
+              disabled={disabled}
+              onChange={event => actions.editText('idleNudgeText', event.target.value)}
             />
           </div>
 

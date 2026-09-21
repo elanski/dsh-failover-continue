@@ -27,6 +27,7 @@ import {
   isNonHumanReason,
   isOurEcho,
   isTransientFailure,
+  shouldNudgeIdle,
   sleep,
   todayKey,
   trackPendingEcho,
@@ -195,6 +196,99 @@ export class AutoContinueRunner {
   private readonly lastInspectAt = new Map<SessionId, number>();
   /** 冷会话的粗筛结论缓存: updatedAt 未变时无需重新读盘。 */
   private readonly coldVerdict = new Map<SessionId, { updatedAt: number; resumable: boolean }>();
+  /** Idle nudges sent per session today (daily cap). */
+  private readonly idleNudged = new Map<SessionId, { date: string; count: number }>();
+  /** Workspace-watch verdicts for cold sessions (avoid re-wake per scan). */
+  private readonly watchVerdicts = new Map<SessionId, { updatedAt: number; watched: boolean }>();
+
+  /** Idle nudges sent to one session today (daily cap). */
+  private nudgedToday(sessionId: SessionId): number {
+    const entry = this.idleNudged.get(sessionId);
+    if (entry === undefined || entry.date !== todayKey()) return 0;
+    return entry.count;
+  }
+
+  /**
+   * Idle-watch: completed-but-silent fleet sessions get a nudge so dead
+   * loop timers (host restart) don't park the fleet. Human-driven sessions
+   * (user message after completion, abort) and unlisted workspaces never
+   * qualify. Returns true when a nudge was scheduled.
+   */
+  private async maybeNudgeIdle(
+    candidate: {
+      sessionId: SessionId;
+      events: readonly SessionEvent[];
+      cwd?: string;
+      cold?: boolean;
+      coldUpdatedAt?: number;
+    },
+    lastEnd: SessionEvent<'turn/end'>,
+    now: number,
+    config: AutoContinueConfig,
+  ): Promise<boolean> {
+    // A user-authored message after the completed turn means a human is
+    // driving — never steal their session.
+    for (const event of candidate.events) {
+      if (event.seq <= lastEnd.seq) continue;
+      if (event.type !== 'user/message') continue;
+      const source = (event.data as { source?: { kind?: unknown } } | undefined)?.source;
+      if (source !== undefined && source.kind === 'user') return false;
+    }
+    // Workspace gate: live sessions read header.cwd free; cold ones resolve
+    // the agent once per log revision (verdict cached, negative included).
+    let cwd = candidate.cwd;
+    if (cwd === undefined && candidate.cold === true) {
+      const cached = this.watchVerdicts.get(candidate.sessionId);
+      if (cached !== undefined && cached.updatedAt === candidate.coldUpdatedAt) {
+        if (!cached.watched) return false;
+      } else {
+        const agent = await this.ensureLiveAgent(candidate.sessionId);
+        const header = agent?.session.header as { cwd?: unknown } | undefined;
+        cwd = typeof header?.cwd === 'string' ? header.cwd : undefined;
+        this.watchVerdicts.set(candidate.sessionId, {
+          updatedAt: candidate.coldUpdatedAt ?? 0,
+          watched: cwd !== undefined && this.isWatchedWorkspace(cwd, config),
+        });
+        if (cwd === undefined) return false;
+      }
+    }
+    const decision = shouldNudgeIdle({
+      lastEndKind: 'completed',
+      openTurn: false,
+      idleMs: now - lastEnd.time,
+      workspaceCwd: cwd,
+      nudgedToday: this.nudgedToday(candidate.sessionId),
+      watchWorkspaces: config.idleWatchWorkspaces,
+      nudgeAfterMs: config.idleNudgeAfterMs,
+      nudgePerDay: config.idleNudgePerDay,
+    });
+    if (!decision) return false;
+    const entry = this.idleNudged.get(candidate.sessionId);
+    const today = todayKey();
+    this.idleNudged.set(
+      candidate.sessionId,
+      entry !== undefined && entry.date === today
+        ? { date: today, count: entry.count + 1 }
+        : { date: today, count: 1 },
+    );
+    this.log(`idle-watch: ${candidate.sessionId} молчит, отправляю «${config.idleNudgeText}»`);
+    this.schedule(candidate.sessionId, 'idle', config.idleNudgeText);
+    return true;
+  }
+
+  /** Workspace allowlist check shared by live and cold paths. */
+  private isWatchedWorkspace(cwd: string, config: AutoContinueConfig): boolean {
+    return shouldNudgeIdle({
+      lastEndKind: 'completed',
+      openTurn: false,
+      idleMs: config.idleNudgeAfterMs,
+      workspaceCwd: cwd,
+      nudgedToday: 0,
+      watchWorkspaces: config.idleWatchWorkspaces,
+      nudgeAfterMs: config.idleNudgeAfterMs,
+      nudgePerDay: config.idleNudgePerDay,
+    });
+  }
   private rescanTimer: ReturnType<typeof setInterval> | undefined;
   /** 连续多少轮重扫没发现中断(用于把轮询放缓)。 */
   private idleScans = 0;
@@ -796,6 +890,7 @@ export class AutoContinueRunner {
     failed?: number;
     gaveUp?: number;
     looped?: number;
+    nudged?: number;
     code?: string;
   }): void {
     const today = todayKey();
@@ -806,6 +901,7 @@ export class AutoContinueRunner {
     if (delta.failed !== undefined) this.dayStats.failed += delta.failed;
     if (delta.gaveUp !== undefined) this.dayStats.gaveUp += delta.gaveUp;
     if (delta.looped !== undefined) this.dayStats.looped += delta.looped;
+    if (delta.nudged !== undefined) this.dayStats.nudged += delta.nudged;
     if (delta.code !== undefined) {
       this.dayStats.byCode[delta.code] = (this.dayStats.byCode[delta.code] ?? 0) + 1;
     }
@@ -873,7 +969,7 @@ export class AutoContinueRunner {
     );
   }
 
-  private schedule(sessionId: SessionId, reason: string): void {
+  private schedule(sessionId: SessionId, reason: string, textOverride?: string): void {
     const state = this.state(sessionId);
     const config = this.getConfig();
     // Subagent sessions may be resumed independently after a host restart.
@@ -898,7 +994,7 @@ export class AutoContinueRunner {
       state.pendingTimer = undefined;
       // 保险丝: 定时器回调内任何异常(含 inactive context)都不得成为未捕获异常炸掉进程。
       try {
-        void this.fire(sessionId, reason).catch((error) => {
+        void this.fire(sessionId, reason, false, textOverride).catch((error) => {
           console.error(`[auto-continue] 定时发送异常 ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
         });
       } catch (error) {
@@ -924,7 +1020,7 @@ export class AutoContinueRunner {
     this.log(`取消 ${sessionId} 的自动继续(${why})`);
   }
 
-  private async fire(sessionId: SessionId, reason: string, force = false): Promise<void> {
+  private async fire(sessionId: SessionId, reason: string, force = false, textOverride?: string): Promise<void> {
     if (this.disposed) return;
     const state = this.state(sessionId);
     const config = this.getConfig();
@@ -947,11 +1043,11 @@ export class AutoContinueRunner {
       return;
     }
     // 模板填充: continueText 可含 {code}/{message}/{status}/{tool}/{turn}/{errorCount}/{sessionTitle}/{elapsed} 占位符
-    const template = reason.startsWith('loop:')
+    const template = textOverride ?? (reason.startsWith('loop:')
       ? config.loopText
       : reason.includes('max-tokens')
         ? config.continueTextMaxTokens
-        : config.continueText;
+        : config.continueText);
     const text = this.buildContinueText(config, state, template);
     // 发送: agent.followup 是排队语义(运行中会排入 inbox, 不会打断), 天然安全
     // 冷会话(host 重启后没人打开过)必须先唤醒, 否则 followup 无处可发。
@@ -979,6 +1075,7 @@ export class AutoContinueRunner {
       state.consecutive += 1;
       state.pendingRecoveryAt = now; // 等待窗口内的下一个回合结束来判定恢复结果
       this.bumpStat({ sent: 1, ...(state.lastFailure !== undefined ? { code: state.lastFailure.code } : {}) });
+      if (reason === 'idle') this.bumpStat({ nudged: 1 });
       this.log(`已自动发送「${text}」到 ${sessionId}(${reason}), 第 ${state.consecutive} 次连续`);
       if (config.notify) {
         const copy = NOTICE_COPY[config.locale];
@@ -1094,6 +1191,8 @@ export class AutoContinueRunner {
       cold?: boolean;
       coldUpdatedAt?: number;
       running?: boolean;
+      /** Workspace path for idle-watch matching (live sessions read it free). */
+      cwd?: string;
     }[] = [];
     for (const agent of this.ctx.agents.list()) {
       const session = agent.session;
@@ -1102,8 +1201,11 @@ export class AutoContinueRunner {
         (latest, event) => Math.max(latest, event.time),
         Number.isFinite(session.header.createdAt) ? session.header.createdAt : 0,
       );
+      const header = session.header as { cwd?: unknown };
+      const cwd = typeof header.cwd === 'string' ? header.cwd : undefined;
       candidates.push({
         sessionId: session.id,
+        cwd,
         events,
         lastActivityAt,
         listIndex: candidates.length,
@@ -1203,6 +1305,13 @@ export class AutoContinueRunner {
       } else {
         const reason = lastEnd!.data.reason;
         reasonKind = readReasonKind(reason);
+        if (reasonKind === 'completed') {
+          // Completed-but-silent sessions are the idle-watch's business, not
+          // the interrupt path's: nudge watched fleet sessions, else skip.
+          // Human stops (aborted/blocked) and unknown kinds never qualify.
+          if (await this.maybeNudgeIdle(candidate, lastEnd!, now, config)) scheduled += 1;
+          continue;
+        }
         if (reasonKind === undefined || !isNonHumanReason(reasonKind)) {
           if (candidate.cold) this.coldVerdict.set(candidate.sessionId, { updatedAt: candidate.coldUpdatedAt!, resumable: false });
           continue;

@@ -20,6 +20,7 @@ export const LOCALIZED_TEXT_DEFAULTS = {
   ru: {
     continueText: 'продолжи',
     continueTextMaxTokens: 'продолжи',
+    idleNudgeText: 'работай',
     guardPendingText: '(Предыдущий инструмент «{tool}» мог не завершиться: проверь его состояние и не запускай снова)',
     guardDoneText: '(Предыдущий инструмент «{tool}» уже выполнен, результат: {result}; не запускай снова, продолжай дальше)',
     loopText: '(Похоже, ты зациклился: прекрати повторять последнее действие и продолжи иначе)',
@@ -27,6 +28,7 @@ export const LOCALIZED_TEXT_DEFAULTS = {
   en: {
     continueText: 'Continue',
     continueTextMaxTokens: 'Continue',
+    idleNudgeText: 'keep working',
     guardPendingText:
       '(The previous tool "{tool}" may not have completed. Check its state before continuing and do not run it again.)',
     guardDoneText:
@@ -44,6 +46,14 @@ export interface AutoContinueSettings {
   continueText?: string;
   /** Text sent when the output token ceiling is reached (same placeholders as `continueText`). */
   continueTextMaxTokens?: string;
+  /** Idle-watch: workspace path fragments (one per line) whose completed-but-silent sessions may be nudged. Empty = disabled. */
+  idleWatchWorkspaces?: string;
+  /** Text sent to an idle watched session. */
+  idleNudgeText?: string;
+  /** Silence after a completed turn before a session counts as idle (ms). */
+  idleNudgeAfterMs?: number;
+  /** Max idle nudges per session per day. */
+  idleNudgePerDay?: number;
   /** Idempotency guard: inspect the last tool call before resuming and steer the model. */
   guardTools?: boolean;
   /** Guard text appended when the last tool call has no confirmed result (it may have partially executed). */
@@ -117,6 +127,9 @@ export const DEFAULT_CONFIG: AutoContinueConfig = {
   backoffFactor: 2,
   // 15min: providers asking "retry in ~1h" need longer than the donor's 5min.
   backoffMaxMs: 900000,
+  idleWatchWorkspaces: '',
+  idleNudgeAfterMs: 15 * 60 * 1000,
+  idleNudgePerDay: 48,
   notify: false,
   paused: false,
   loopGuard: true,
@@ -178,6 +191,16 @@ export function resolveConfig(section: AutoContinueSettings | undefined): AutoCo
         : DEFAULT_CONFIG.retryableErrorPatterns,
     backoffFactor: Math.max(1, numberOr(value.backoffFactor, DEFAULT_CONFIG.backoffFactor)),
     backoffMaxMs: numberOr(value.backoffMaxMs, DEFAULT_CONFIG.backoffMaxMs),
+    idleWatchWorkspaces:
+      typeof value.idleWatchWorkspaces === 'string'
+        ? value.idleWatchWorkspaces
+        : DEFAULT_CONFIG.idleWatchWorkspaces,
+    idleNudgeText:
+      typeof value.idleNudgeText === 'string' && value.idleNudgeText.trim() !== ''
+        ? value.idleNudgeText
+        : localized.idleNudgeText,
+    idleNudgeAfterMs: numberOr(value.idleNudgeAfterMs, DEFAULT_CONFIG.idleNudgeAfterMs),
+    idleNudgePerDay: Math.max(1, numberOr(value.idleNudgePerDay, DEFAULT_CONFIG.idleNudgePerDay)),
     notify: booleanOr(value.notify, DEFAULT_CONFIG.notify),
     paused: booleanOr(value.paused, DEFAULT_CONFIG.paused),
     loopGuard: booleanOr(value.loopGuard, DEFAULT_CONFIG.loopGuard),
@@ -775,6 +798,8 @@ export interface DayStats {
   gaveUp: number;
   /** loop guard 打断并重启回合的次数。 */
   looped: number;
+  /** idle-watch добуждений отправлено. */
+  nudged: number;
   /** 按错误码计数的失败分布。 */
   byCode: Record<string, number>;
 }
@@ -788,7 +813,50 @@ export function todayKey(): string {
 
 /** 空统计桶。 */
 export function emptyDayStats(): DayStats {
-  return { date: todayKey(), sent: 0, skipped: 0, recovered: 0, failed: 0, gaveUp: 0, looped: 0, byCode: {} };
+  return { date: todayKey(), sent: 0, skipped: 0, recovered: 0, failed: 0, gaveUp: 0, looped: 0, nudged: 0, byCode: {} };
+}
+
+/** Input for the idle-watch decision (pure, unit-tested). */
+export interface IdleWatchInput {
+  /** Last turn/end reason kind (undefined = no closed turn found). */
+  lastEndKind: string | undefined;
+  /** Open (unterminated) turn present. */
+  openTurn: boolean;
+  /** ms since the session's last activity. */
+  idleMs: number;
+  /** Session workspace path (header.cwd), if known. */
+  workspaceCwd: string | undefined;
+  /** Idle nudges already sent to this session today. */
+  nudgedToday: number;
+  /** Resolved config slice. */
+  watchWorkspaces: string;
+  nudgeAfterMs: number;
+  nudgePerDay: number;
+}
+
+/** Normalize a path for fragment matching (slashes, case). */
+function normPath(value: string): string {
+  return value.replace(/\\/g, '/').toLowerCase();
+}
+
+/**
+ * Should a completed-but-silent session be nudged? Pure decision:
+ * completed terminal turn, stale enough, workspace allowlisted (non-empty),
+ * daily cap unspent. Anything human (abort/block) or unlisted never qualifies.
+ */
+export function shouldNudgeIdle(input: IdleWatchInput): boolean {
+  if (input.openTurn) return false;
+  if (input.lastEndKind !== 'completed') return false;
+  if (!(input.idleMs >= input.nudgeAfterMs)) return false;
+  if (!(input.nudgedToday < input.nudgePerDay)) return false;
+  const fragments = input.watchWorkspaces
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  if (fragments.length === 0) return false;
+  if (input.workspaceCwd === undefined || input.workspaceCwd === '') return false;
+  const cwd = normPath(input.workspaceCwd);
+  return fragments.some((fragment) => cwd.includes(normPath(fragment)));
 }
 
 /** 每会话运行时状态。 */

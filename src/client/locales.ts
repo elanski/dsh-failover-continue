@@ -52,6 +52,14 @@ export interface FailoverContinueLocale {
   loopShortCount: string
   loopRepeatText: string
   loopToolRepeat: string
+  idleWatch: string
+  idleWatchHint: string
+  idleWatchWorkspaces: string
+  idleWatchWorkspacesHint: string
+  idleNudgeText: string
+  idleNudgeTextHint: string
+  idleNudgeAfterMs: string
+  idleNudgePerDay: string
   overridden: string
   reset: string
   unsaved: string
@@ -117,6 +125,14 @@ export const en: FailoverContinueLocale = {
   loopShortCount: 'Short messages to trip',
   loopRepeatText: 'Repeated texts to trip',
   loopToolRepeat: 'Repeated tool calls to trip',
+  idleWatch: 'Idle fleet watch',
+  idleWatchHint: 'Nudges completed-but-silent sessions in listed workspaces so dead loop timers never park the fleet. Human-stopped (abort) and unlisted sessions are never touched.',
+  idleWatchWorkspaces: 'Watched workspaces',
+  idleWatchWorkspacesHint: 'Workspace path fragments, one per line. Empty disables idle-watch entirely.',
+  idleNudgeText: 'Idle nudge text',
+  idleNudgeTextHint: 'Message sent to an idle watched session.',
+  idleNudgeAfterMs: 'Idle silence before nudge (ms)',
+  idleNudgePerDay: 'Max nudges per session per day',
   overridden: 'edited',
   reset: 'Reset',
   unsaved: 'unsaved',
@@ -182,6 +198,14 @@ export const ru: FailoverContinueLocale = {
   loopShortCount: 'Коротких подряд до сработки',
   loopRepeatText: 'Повторов текста до сработки',
   loopToolRepeat: 'Повторов tool-вызовов до сработки',
+  idleWatch: 'Дозор простоя',
+  idleWatchHint: 'Добуждает завершённые-но-молчащие сессии из списка: смерть loop-таймеров не усыпляет флот. Остановленные человеком и не из списка — никогда.',
+  idleWatchWorkspaces: 'Дежурные воркспейсы',
+  idleWatchWorkspacesHint: 'Фрагменты путей воркспейсов, по одному на строку. Пусто — дозор выключен.',
+  idleNudgeText: 'Текст добуждения',
+  idleNudgeTextHint: 'Сообщение простаивающей дежурной сессии.',
+  idleNudgeAfterMs: 'Тишина до добуждения (мс)',
+  idleNudgePerDay: 'Макс. добуждений на сессию в день',
   overridden: 'изменено',
   reset: 'Сбросить',
   unsaved: 'не сохранено',
