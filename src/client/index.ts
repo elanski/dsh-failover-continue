@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { FailoverContinueCardModel, FailoverContinueCard } from './FailoverContinueCard.tsx'
 import type { CardActions } from './FailoverContinueCard.tsx'
 import { en, ru, type FailoverContinueLocale } from './locales.ts'
+import { PLUGIN_VERSION } from './version.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -44,6 +45,7 @@ export const inject = ['slots', 'locale', 'settingsScope']
  * @param ctx - the browser plugin context.
  */
 export function apply(ctx: ClientContext): void {
+  console.info(`[dsh-failover-continue] client ${PLUGIN_VERSION}`);
   try {
     const localeApi = ctx.locale as unknown as {
       addLanguage?: (input: { id: string; label: string; fallback: string }) => () => void;

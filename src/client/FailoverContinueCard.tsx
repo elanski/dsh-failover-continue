@@ -10,6 +10,7 @@
  */
 import { useState } from 'react'
 import { en, ru, type FailoverContinueLocale } from './locales.ts'
+import { PLUGIN_VERSION } from './version.ts'
 import styles from './FailoverContinueCard.module.css'
 
 /** One fallback route row in the draft. */
@@ -781,6 +782,7 @@ export function FailoverContinueCard({ t: hostT, useCard, ...actions }: Props) {
           </div>
 
           <p className={styles.footNote}>{t('liveNotice')}</p>
+          <p className={styles.footNote}>dsh-failover-continue {PLUGIN_VERSION}</p>
           <div className={styles.footer}>
             {state.failed ? <span className={styles.statusErr} role="alert">{t('saveFailed')}</span> : null}
             {state.saved ? <span className={styles.statusOk} role="status">{t('saved')}</span> : null}
