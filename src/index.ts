@@ -352,14 +352,25 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     if (doctorTimer !== undefined) clearTimeout(doctorTimer);
     doctorTimer = setTimeout(() => {
       doctorTimer = undefined;
-      void runDoctor('scheduled').finally(() => scheduleDoctor());
+      // Never let a rejection escape: an unhandled rejection kills node.
+      void runDoctor('scheduled').then(
+        () => scheduleDoctor(),
+        (error) => {
+          console.warn('[dsh-failover-continue] doctor round failed: %s', String(error));
+          scheduleDoctor();
+        },
+      );
     }, resolved.doctorIntervalMs);
     if (typeof doctorTimer.unref === 'function') doctorTimer.unref();
   };
 
   // First round shortly after boot (catches dead routes before sessions do),
   // then on the configured interval. Re-armed on every settings change.
-  const bootDoctorTimer = setTimeout(() => void runDoctor('boot'), 60_000);
+  const bootDoctorTimer = setTimeout(() => {
+    void runDoctor('boot').catch((error) => {
+      console.warn('[dsh-failover-continue] doctor boot round failed: %s', String(error));
+    });
+  }, 60_000);
   if (typeof bootDoctorTimer.unref === 'function') bootDoctorTimer.unref();
   scheduleDoctor();
 
