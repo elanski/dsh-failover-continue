@@ -1257,9 +1257,18 @@ export class AutoContinueRunner {
           continue; // 会话可能刚被移除
         }
         if (!Array.isArray(events) || events.length === 0) continue;
-        // 这里只是"值得深查"的粗筛: 精判在下面的统一循环里。粗筛为假就记进
-        // 缓存, 下次同一 updatedAt 不再读盘。
-        const worthChecking = looksInterrupted(events);
+        // Coarse pre-filter: interrupted/error → interrupt path; completed →
+        // idle-watch candidate (silence + workspace checked later).
+        // 精判在下面的统一循环里。粗筛为假就记进缓存, 下次同一 updatedAt 不再读盘。
+        let lastKind: string | undefined;
+        for (let i = events.length - 1; i >= 0; i -= 1) {
+          const event = events[i];
+          if (event !== undefined && event.type === 'turn/end') {
+            lastKind = readReasonKind((event.data as { reason?: unknown }).reason);
+            break;
+          }
+        }
+        const worthChecking = looksInterrupted(events) || lastKind === 'completed';
         this.coldVerdict.set(sessionId as SessionId, { updatedAt, resumable: worthChecking });
         if (!worthChecking) continue;
         candidates.push({
