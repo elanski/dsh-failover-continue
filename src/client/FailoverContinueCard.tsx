@@ -9,7 +9,7 @@
  * auto-continue section (ported from `dsh-client-auto-continue`, MIT).
  */
 import { useState } from 'react'
-import type { FailoverContinueLocale } from './locales.ts'
+import { en, ru, type FailoverContinueLocale } from './locales.ts'
 import styles from './FailoverContinueCard.module.css'
 
 /** One fallback route row in the draft. */
@@ -531,13 +531,18 @@ function FieldHead(props: {
 }
 
 /**
- * Render the model-failover card in the Plugin configuration tab.
- * @param props - locale seat, the card store hook, and the draft actions.
+ * Render the failover-continue card in the Plugin configuration tab.
+ *
+ * Card language comes from the plugin's own `locale` setting (the selector
+ * in the card), NOT from the DSH interface locale: the injected `t` is only
+ * used for the pre-settings loading stub.
  */
-export function FailoverContinueCard({ t, useCard, ...actions }: Props) {
+export function FailoverContinueCard({ t: hostT, useCard, ...actions }: Props) {
   const state = useCard(snapshot => snapshot)
   const [open, setOpen] = useState(true)
-  if (!state.available) return <li className={styles.card}><div className={styles.body}>{t('loading')}</div></li>
+  if (!state.available) return <li className={styles.card}><div className={styles.body}>{hostT('loading')}</div></li>
+  const dict = state.locale === 'en' ? en : ru
+  const t = (key: keyof FailoverContinueLocale): string => dict[key] ?? en[key]
   const disabled = !state.writable || state.saving
   return (
     <li className={styles.card}>
