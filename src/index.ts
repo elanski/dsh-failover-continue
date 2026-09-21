@@ -243,6 +243,9 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     burstWindowMs: resolved.burstWindowMs,
   });
   const attempts = new WeakMap<Agent, Map<string, Attempt>>();
+  /** First primary ever seen per agent (home fallback when settings lack it). */
+  const firstSeen = new WeakMap<Agent, FallbackRoute>();
+  let homeLogged = false;
   /**
    * One-shot revert tickets. A session I divert (or one found off-home) gets
    * a single automatic trip home once home is healthy; then the ticket is
@@ -266,7 +269,12 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     } catch {
       // fall through to first-seen primary
     }
-    void agent;
+    const seen = firstSeen.get(agent);
+    if (seen !== undefined) return seen;
+    if (!homeLogged) {
+      homeLogged = true;
+      ctx.logger.warn('[dsh-failover-continue] agent-default-model unreadable, home falls back to first-seen primary');
+    }
     return primary;
   };
 
@@ -390,6 +398,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     const base = await next();
     if (!resolved.enabled || resolved.fallbacks.length === 0) return base;
     const primary: FallbackRoute = { provider: base.provider, model: base.model };
+    if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
     const home = homeRoute(payload.agent, primary);
     const homeKey = modelKey(home.provider, home.model);
     const primaryKey = modelKey(primary.provider, primary.model);
