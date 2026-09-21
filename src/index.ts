@@ -29,7 +29,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type {} from '@deepseek-ai/dsh-agent';
-import { CircuitBreaker, modelKey, type FallbackRoute } from './circuit.ts';
+import { CircuitBreaker, modelKey, revertDecision, type FallbackRoute } from './circuit.ts';
 import { AutoContinueRunner } from './continue-engine.ts';
 import {
   resolveConfig,
@@ -243,39 +243,25 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     burstWindowMs: resolved.burstWindowMs,
   });
   const attempts = new WeakMap<Agent, Map<string, Attempt>>();
-  /** First primary ever seen per agent (home fallback when settings lack it). */
-  const firstSeen = new WeakMap<Agent, FallbackRoute>();
-  let homeLogged = false;
   /**
-   * Sessions THIS process diverted via a failover walk. Only these are
-   * eligible for revert-home. Manual picker choices are never recorded here,
-   * so per-session model freedom is untouched: pick anything per agent and
-   * it sticks (until that route itself fails and walks again).
+   * Home = first primary ever seen for the agent in this process. Deliberately
+   * NOT the `agent-default-model` namespace: the host overwrites that global
+   * on every per-session picker change (session-controller `selectModel` →
+   * `saveSelection`), so it is volatile by design and unfit as a revert target.
    */
-  const divertedByUs = new WeakSet<Agent>();
+  const firstSeen = new WeakMap<Agent, FallbackRoute>();
+  /**
+   * Walk trail per agent: targets THIS process assigned, in order. Revert is
+   * allowed only while the session still sits on our last assigned target —
+   * a manual pick diverges the trail and is never touched afterwards.
+   */
+  const trail = new WeakMap<Agent, FallbackRoute[]>();
 
   const currentFallbacks = (): FallbackRoute[] => resolved.fallbacks;
 
-  /** Session default route (revert target). Falls back to first-seen primary. */
-  const homeRoute = (agent: Agent, primary: FallbackRoute): FallbackRoute => {
-    try {
-      const svc = settingsService(ctx);
-      const home = svc?.get?.('agent-default-model') as { provider?: unknown; model?: unknown } | undefined;
-      if (typeof home?.provider === 'string' && typeof home?.model === 'string'
-        && home.provider !== '' && home.model !== '') {
-        return { provider: home.provider, model: home.model };
-      }
-    } catch {
-      // fall through to first-seen primary
-    }
-    const seen = firstSeen.get(agent);
-    if (seen !== undefined) return seen;
-    if (!homeLogged) {
-      homeLogged = true;
-      console.warn('[dsh-failover-continue] agent-default-model unreadable and no first-seen route, home=primary (revert inert)');
-    }
-    return primary;
-  };
+  /** Revert target: first-seen primary (see note above). */
+  const homeRoute = (agent: Agent, primary: FallbackRoute): FallbackRoute =>
+    firstSeen.get(agent) ?? primary;
 
   const continuable = (failure: FailureFacts): boolean => {
     if (!resolved.enabled) return false;
@@ -401,12 +387,18 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     // poisons itself (firstSeen === primary → home can never differ).
     const home = homeRoute(payload.agent, primary);
     if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
-    const homeKey = modelKey(home.provider, home.model);
-    const primaryKey = modelKey(primary.provider, primary.model);
-    // Revert: ONLY sessions diverted by this process go home, and only once
-    // (flag consumed). Manual picker choices are never recorded, never touched.
-    if (divertedByUs.has(payload.agent) && homeKey !== primaryKey && !breaker.isOpen(home.provider, home.model)) {
-      divertedByUs.delete(payload.agent);
+    // Revert: only while the session still sits exactly where OUR walk put it
+    // (trail tail == primary). A manual picker choice diverges the trail and
+    // is never touched afterwards.
+    const walked = trail.get(payload.agent);
+    const trailLast = walked !== undefined && walked.length > 0 ? walked[walked.length - 1] : undefined;
+    if (revertDecision({
+      primary,
+      home,
+      trailLast,
+      homeOpen: breaker.isOpen(home.provider, home.model),
+    })) {
+      trail.delete(payload.agent);
       console.warn(
         '[dsh-failover-continue] %s: %s/%s off-home, reverting to %s/%s',
         payload.agent.id, primary.provider, primary.model, home.provider, home.model,
@@ -496,10 +488,11 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     return { kind: 'retry' };
   });
 
-  function markDiverted(agent: Agent, _from: FallbackRoute, _to: FallbackRoute): void {
+  function markDiverted(agent: Agent, _from: FallbackRoute, to: FallbackRoute): void {
     void _from;
-    void _to;
-    divertedByUs.add(agent);
+    const walked = trail.get(agent) ?? [];
+    walked.push({ provider: to.provider, model: to.model });
+    trail.set(agent, walked);
   }
 
   function notifySwitch(agent: Agent, from: FallbackRoute, to: FallbackRoute): void {
