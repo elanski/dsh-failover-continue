@@ -8,7 +8,7 @@
  * Ported from `dsh-model-failover-settings` (MIT) and extended with the
  * auto-continue section (ported from `dsh-client-auto-continue`, MIT).
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { en, ru, type FailoverContinueLocale } from './locales.ts'
 import { PLUGIN_VERSION } from './version.ts'
 import styles from './FailoverContinueCard.module.css'
@@ -38,6 +38,9 @@ export const CONTINUE_NUMBERS = [
   'freshMs',
   'backoffFactor',
   'backoffMaxMs',
+  'doctorIntervalMs',
+  'doctorTimeoutMs',
+  'doctorMaxTokens',
   'idleNudgeAfterMs',
   'idleNudgePerDay',
   'loopShortChars',
@@ -52,7 +55,7 @@ export const NUMBER_FIELDS = [...BREAKER_NUMBERS, ...CONTINUE_NUMBERS] as const
 export type NumberField = (typeof NUMBER_FIELDS)[number]
 
 /** Boolean fields. */
-export const TOGGLE_FIELDS = ['enabled', 'scanOnBoot', 'classify', 'notify', 'paused', 'loopGuard'] as const
+export const TOGGLE_FIELDS = ['enabled', 'scanOnBoot', 'classify', 'notify', 'paused', 'loopGuard', 'doctorEnabled'] as const
 export type ToggleField = (typeof TOGGLE_FIELDS)[number]
 
 /** Free-text fields. */
@@ -82,6 +85,10 @@ export interface FailoverSection {
   retryableErrorPatterns?: string
   backoffFactor?: number
   backoffMaxMs?: number
+  doctorEnabled?: boolean
+  doctorIntervalMs?: number
+  doctorTimeoutMs?: number
+  doctorMaxTokens?: number
   idleWatchWorkspaces?: string
   idleNudgeText?: string
   idleNudgeAfterMs?: number
@@ -525,6 +532,52 @@ export class FailoverContinueCardModel {
   }
 }
 
+/** Live pool-health table, read-only from the host status route (best effort). */
+function HealthTable(props: {
+  t: (key: keyof FailoverContinueLocale) => string
+}): JSX.Element {
+  const [snapshot, setSnapshot] = useState<null | {
+    health: { provider: string; model: string; open: boolean; remainingMs: number }[]
+    doctor: { at: number; results: { provider: string; model: string; ok: boolean; latencyMs: number; code?: string; error?: string }[] }
+  }>(null)
+  useEffect(() => {
+    let live = true
+    fetch('/api/failover-continue/status')
+      .then(response => response.json() as Promise<{ ok?: boolean; data?: {
+        health: { provider: string; model: string; open: boolean; remainingMs: number }[]
+        doctor?: { at: number; results: { provider: string; model: string; ok: boolean; latencyMs: number; code?: string; error?: string }[] }
+      } }>)
+      .then(body => {
+        if (!live || body?.ok !== true || body.data === undefined) return
+        setSnapshot({ health: body.data.health, doctor: body.data.doctor ?? { at: 0, results: [] } })
+      })
+      .catch(() => {})
+    return () => { live = false }
+  }, [])
+  const t = props.t
+  if (snapshot === null) return <p className={styles.hint}>{t('healthUnavailable')}</p>
+  const probes = new Map(snapshot.doctor.results.map(r => [`${r.provider}${r.model}`, r]))
+  return (
+    <div>
+      {snapshot.health.map(row => {
+        const probe = probes.get(`${row.provider}${row.model}`)
+        const state = row.open
+          ? `${t('stateOpen')} ${Math.max(0, Math.round(row.remainingMs / 1000))}s`
+          : probe === undefined
+            ? t('stateOk')
+            : probe.ok
+              ? `${t('stateOk')} ${probe.latencyMs}ms`
+              : `${probe.code ?? 'FAIL'}: ${probe.error ?? ''}`
+        return (
+          <p className={styles.hint} key={`${row.provider}/${row.model}`}>
+            {row.provider}/{row.model} — {state}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Per-field row chrome: label, hint, "edited" badge, reset. */
 function FieldHead(props: {
   label: string
@@ -735,6 +788,21 @@ export function FailoverContinueCard({ t: hostT, useCard, ...actions }: Props) {
               />
               <span className={styles.label}> {t('loopGuard')}</span>
             </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.toggles.doctorEnabled.value}
+                disabled={disabled}
+                onChange={event => actions.toggle('doctorEnabled', event.target.checked)}
+              />
+              <span className={styles.label}> {t('doctorEnabled')}</span>
+            </label>
+          </div>
+
+          <div className={styles.row}>
+            <span className={styles.label}>{t('doctorSection')}</span>
+            <p className={styles.hint}>{t('doctorSectionHint')}</p>
+            <HealthTable t={t} />
           </div>
 
           <div className={styles.row}>

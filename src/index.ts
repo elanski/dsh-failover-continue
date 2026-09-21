@@ -30,6 +30,7 @@ import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type {} from '@deepseek-ai/dsh-agent';
 import { CircuitBreaker, modelKey, revertDecision, type FallbackRoute } from './circuit.ts';
+import { probeRoute, type DoctorResult } from './doctor.ts';
 import { AutoContinueRunner } from './continue-engine.ts';
 import {
   isPolicyRefusal,
@@ -108,6 +109,10 @@ export const Config = z.object({
   platformCooldownMs: z.number().min(0).default(120_000),
   burstWindowMs: z.number().min(1).default(900_000),
   maxSwitchesPerStep: z.number().min(1).default(5),
+  doctorEnabled: z.boolean().default(true),
+  doctorIntervalMs: z.number().min(60_000).default(900_000),
+  doctorTimeoutMs: z.number().min(5_000).default(30_000),
+  doctorMaxTokens: z.number().min(1).default(8),
 });
 
 export type FailoverContinueConfig = ReturnType<typeof resolveFullConfig>;
@@ -123,6 +128,10 @@ interface ResolvedFull {
   platformCooldownMs: number;
   burstWindowMs: number;
   maxSwitchesPerStep: number;
+  doctorEnabled: boolean;
+  doctorIntervalMs: number;
+  doctorTimeoutMs: number;
+  doctorMaxTokens: number;
 }
 
 function num(value: unknown, fallback: number): number {
@@ -165,6 +174,10 @@ export function resolveFullConfig(section: Record<string, unknown> | undefined):
     platformCooldownMs: num(value['platformCooldownMs'], 120_000),
     burstWindowMs: Math.max(1, num(value['burstWindowMs'], 900_000)),
     maxSwitchesPerStep: Math.max(1, Math.floor(num(value['maxSwitchesPerStep'], 5))),
+    doctorEnabled: typeof value['doctorEnabled'] === 'boolean' ? (value['doctorEnabled'] as boolean) : true,
+    doctorIntervalMs: Math.max(60_000, num(value['doctorIntervalMs'], 900_000)),
+    doctorTimeoutMs: Math.max(5_000, num(value['doctorTimeoutMs'], 30_000)),
+    doctorMaxTokens: Math.max(1, Math.floor(num(value['doctorMaxTokens'], 8))),
   };
 }
 
@@ -281,6 +294,75 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
   const getContinueConfig = (): AutoContinueConfig => resolved.continue_;
   const runner = new AutoContinueRunner(ctx, getContinueConfig, { continuable });
 
+  // ---- Doctor: scheduled liveness probes ---------------------------------
+  let doctorState: { at: number; results: DoctorResult[] } = { at: 0, results: [] };
+  let doctorRunning = false;
+  let doctorTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const runDoctor = async (reason: string): Promise<void> => {
+    if (doctorRunning) return;
+    const routes = currentFallbacks();
+    if (!resolved.enabled || !resolved.doctorEnabled || routes.length === 0) return;
+    doctorRunning = true;
+    try {
+      const llm = (ctx as unknown as {
+        llm?: {
+          stream(o: {
+            provider: string;
+            model: string;
+            messages: unknown[];
+            maxTokens?: number;
+            signal?: AbortSignal;
+          }): AsyncIterable<unknown>;
+        };
+      }).llm;
+      if (llm === undefined || typeof llm.stream !== 'function') {
+        console.warn('[dsh-failover-continue] doctor: llm service unavailable');
+        return;
+      }
+      const results: DoctorResult[] = [];
+      for (const route of routes) {
+        try {
+          const result = await probeRoute(llm, route, resolved.doctorMaxTokens, resolved.doctorTimeoutMs);
+          results.push(result);
+          if (!result.ok) {
+            const level = breaker.recordFailure(route.provider, route.model);
+            console.warn(
+              '[dsh-failover-continue] doctor: %s/%s %s (%s)%s',
+              route.provider, route.model, result.code ?? 'FAIL', result.error ?? '',
+              level !== undefined ? `, circuit ${level}` : '',
+            );
+          }
+        } catch (error) {
+          console.warn(
+            '[dsh-failover-continue] doctor: %s/%s probe crashed: %s',
+            route.provider, route.model, String(error),
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+      doctorState = { at: Date.now(), results };
+      console.info(`[dsh-failover-continue] doctor finished ${results.length} routes (${reason})`);
+    } finally {
+      doctorRunning = false;
+    }
+  };
+
+  const scheduleDoctor = (): void => {
+    if (doctorTimer !== undefined) clearTimeout(doctorTimer);
+    doctorTimer = setTimeout(() => {
+      doctorTimer = undefined;
+      void runDoctor('scheduled').finally(() => scheduleDoctor());
+    }, resolved.doctorIntervalMs);
+    if (typeof doctorTimer.unref === 'function') doctorTimer.unref();
+  };
+
+  // First round shortly after boot (catches dead routes before sessions do),
+  // then on the configured interval. Re-armed on every settings change.
+  const bootDoctorTimer = setTimeout(() => void runDoctor('boot'), 60_000);
+  if (typeof bootDoctorTimer.unref === 'function') bootDoctorTimer.unref();
+  scheduleDoctor();
+
   let rawSource: () => Record<string, unknown> = () => entry;
   const currentRaw = (): Record<string, unknown> => rawSource();
 
@@ -295,6 +377,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
       platformCooldownMs: resolved.platformCooldownMs,
       burstWindowMs: resolved.burstWindowMs,
     });
+    scheduleDoctor();
   };
 
   let settingsInstalled = false;
@@ -547,6 +630,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
       })),
       stats: runner.todayStats(),
       paused: runner.activePauses(),
+      doctor: doctorState,
     };
   };
 
@@ -625,5 +709,7 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
   ctx.effect(() => () => {
     runner.dispose();
     sseClients.clear();
+    if (doctorTimer !== undefined) clearTimeout(doctorTimer);
+    clearTimeout(bootDoctorTimer);
   }, 'dsh-failover-continue: dispose');
 }

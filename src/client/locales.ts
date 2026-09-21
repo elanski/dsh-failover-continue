@@ -60,6 +60,15 @@ export interface FailoverContinueLocale {
   idleNudgeTextHint: string
   idleNudgeAfterMs: string
   idleNudgePerDay: string
+  doctorSection: string
+  doctorSectionHint: string
+  doctorEnabled: string
+  doctorIntervalMs: string
+  doctorTimeoutMs: string
+  doctorMaxTokens: string
+  healthUnavailable: string
+  stateOpen: string
+  stateOk: string
   overridden: string
   reset: string
   unsaved: string
@@ -133,6 +142,15 @@ export const en: FailoverContinueLocale = {
   idleNudgeTextHint: 'Message sent to an idle watched session.',
   idleNudgeAfterMs: 'Idle silence before nudge (ms)',
   idleNudgePerDay: 'Max nudges per session per day',
+  doctorSection: 'Pool doctor',
+  doctorSectionHint: 'Scheduled liveness probes park dead routes before sessions bleed on them. Table below is live host state (read-only).',
+  doctorEnabled: 'Probe the pool on a schedule',
+  doctorIntervalMs: 'Probe interval (ms)',
+  doctorTimeoutMs: 'Probe timeout (ms)',
+  doctorMaxTokens: 'Probe max tokens',
+  healthUnavailable: 'Live health unavailable (host rebooting?).',
+  stateOpen: 'OPEN, cooldown',
+  stateOk: 'healthy',
   overridden: 'edited',
   reset: 'Reset',
   unsaved: 'unsaved',
@@ -206,6 +224,15 @@ export const ru: FailoverContinueLocale = {
   idleNudgeTextHint: 'Сообщение простаивающей дежурной сессии.',
   idleNudgeAfterMs: 'Тишина до добуждения (мс)',
   idleNudgePerDay: 'Макс. добуждений на сессию в день',
+  doctorSection: 'Доктор пула',
+  doctorSectionHint: 'Плановые пробы паркуют мёртвые маршруты до того, как на них упадут сессии. Таблица ниже — живое состояние хоста (только чтение).',
+  doctorEnabled: 'Пробовать пул по расписанию',
+  doctorIntervalMs: 'Интервал проб (мс)',
+  doctorTimeoutMs: 'Таймаут пробы (мс)',
+  doctorMaxTokens: 'Макс. токенов пробы',
+  healthUnavailable: 'Живое здоровье недоступно (хост перезапускается?).',
+  stateOpen: 'ОТКРЫТ, остывание',
+  stateOk: 'здоров',
   overridden: 'изменено',
   reset: 'Сбросить',
   unsaved: 'не сохранено',
