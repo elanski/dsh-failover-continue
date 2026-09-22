@@ -112,7 +112,9 @@ export const Config = z.object({
   doctorEnabled: z.boolean().default(true),
   doctorIntervalMs: z.number().min(60_000).default(900_000),
   doctorTimeoutMs: z.number().min(5_000).default(30_000),
-  doctorMaxTokens: z.number().min(1).default(8),
+  // 1024, not 8: reasoning/bridged models (muse-spark) burn small budgets
+  // and answer 400 on crumbs while perfectly alive on real budgets.
+  doctorMaxTokens: z.number().min(1).default(1024),
 });
 
 export type FailoverContinueConfig = ReturnType<typeof resolveFullConfig>;
@@ -177,7 +179,7 @@ export function resolveFullConfig(section: Record<string, unknown> | undefined):
     doctorEnabled: typeof value['doctorEnabled'] === 'boolean' ? (value['doctorEnabled'] as boolean) : true,
     doctorIntervalMs: Math.max(60_000, num(value['doctorIntervalMs'], 900_000)),
     doctorTimeoutMs: Math.max(5_000, num(value['doctorTimeoutMs'], 30_000)),
-    doctorMaxTokens: Math.max(1, Math.floor(num(value['doctorMaxTokens'], 8))),
+    doctorMaxTokens: Math.max(1, Math.floor(num(value['doctorMaxTokens'], 1024))),
   };
 }
 
