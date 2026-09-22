@@ -41,7 +41,7 @@
     "build:host": "tsc -p tsconfig.json",
     "build:client": "tsdown",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
-    "test": "node --test --experimental-strip-types tests/circuit.test.ts tests/config.test.ts tests/walk.test.ts tests/idle.test.ts tests/revert.test.ts tests/policy.test.ts tests/doctor.test.ts"
+    "test": "node --test --experimental-strip-types tests/circuit.test.ts tests/config.test.ts tests/walk.test.ts tests/idle.test.ts tests/stepup.test.ts tests/policy.test.ts tests/doctor.test.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1",

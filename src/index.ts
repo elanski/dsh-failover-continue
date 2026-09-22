@@ -29,7 +29,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/dsh-host-webserver';
 import type {} from '@deepseek-ai/dsh-agent';
-import { CircuitBreaker, modelKey, revertDecision, type FallbackRoute } from './circuit.ts';
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types';
+import { CircuitBreaker, modelKey, stepUpIndex, type FallbackRoute } from './circuit.ts';
 import { probeRoute, type DoctorResult } from './doctor.ts';
 import { AutoContinueRunner } from './continue-engine.ts';
 import {
@@ -263,24 +264,75 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
   });
   const attempts = new WeakMap<Agent, Map<string, Attempt>>();
   /**
-   * Home = first primary ever seen for the agent in this process. Deliberately
-   * NOT the `agent-default-model` namespace: the host overwrites that global
-   * on every per-session picker change (session-controller `selectModel` →
-   * `saveSelection`), so it is volatile by design and unfit as a revert target.
-   */
-  const firstSeen = new WeakMap<Agent, FallbackRoute>();
-  /**
-   * Walk trail per agent: targets THIS process assigned, in order. Revert is
+   * Walk trail per agent: targets THIS process assigned, in order. Step-up is
    * allowed only while the session still sits on our last assigned target —
    * a manual pick diverges the trail and is never touched afterwards.
+   * The trail is reconstructed from the session log once per boot, so it
+   * survives host restarts (unlike the in-memory map alone).
    */
   const trail = new WeakMap<Agent, FallbackRoute[]>();
+  /** Agents whose trail was already reconstructed from the session log. */
+  const trailScanned = new WeakSet<Agent>();
 
   const currentFallbacks = (): FallbackRoute[] => resolved.fallbacks;
 
-  /** Revert target: first-seen primary (see note above). */
-  const homeRoute = (agent: Agent, primary: FallbackRoute): FallbackRoute =>
-    firstSeen.get(agent) ?? primary;
+  /**
+   * Reconstruct our walk trail from the session log (survives restarts).
+   * The last OUR switch notice wins; a host `[model changed:]` notice or a
+   * human user message afterwards means manual driving — no trail.
+   * The trail is set only when the latest header still sits on our target.
+   */
+  const reconstructTrailFromLog = (agent: Agent): void => {
+    let events: readonly SessionEvent[];
+    try {
+      const session = agent.session as unknown as {
+        snapshotEvents?: () => readonly SessionEvent[];
+        events?: readonly SessionEvent[];
+      };
+      events = typeof session.snapshotEvents === 'function'
+        ? session.snapshotEvents()
+        : (session.events ?? []);
+    } catch {
+      return;
+    }
+    const tail = events.slice(-300);
+    let lastOurs: { seq: number; provider: string; model: string } | undefined;
+    for (const event of tail) {
+      if (event.type !== 'user/message') continue;
+      const data = event.data as {
+        content?: { text?: string }[];
+        source?: { kind?: string; plugin?: string; rpcId?: string };
+      };
+      const text = data?.content?.[0]?.text ?? '';
+      if (data?.source?.kind === 'plugin' && data?.source?.plugin === 'dsh-failover-continue') {
+        const match = /переключено на (\S+)\/(\S+)|switched to (\S+)\/(\S+)/.exec(text);
+        if (match === null) continue;
+        const provider = match[1] ?? match[3] ?? '';
+        const model = match[2] ?? match[4] ?? '';
+        if (provider !== '' && model !== '') {
+          lastOurs = { seq: event.seq, provider, model };
+        }
+        continue;
+      }
+      if (event.seq <= (lastOurs?.seq ?? -1)) continue;
+      // Anything routing-related after our notice voids the trail.
+      if (text.startsWith('[model changed:')) return;
+      if (data?.source?.kind === 'user' && data?.source?.rpcId !== undefined) return;
+    }
+    if (lastOurs === undefined) return;
+    let lastHeader: { seq: number; provider: string; model: string } | undefined;
+    for (const event of tail) {
+      if (event.type !== 'request/header' || event.seq < lastOurs.seq) continue;
+      const config = (event.data as { header?: { config?: { provider?: string; model?: string } } })
+        ?.header?.config;
+      if (typeof config?.provider === 'string' && typeof config?.model === 'string') {
+        lastHeader = { seq: event.seq, provider: config.provider, model: config.model };
+      }
+    }
+    if (lastHeader === undefined) return;
+    if (lastHeader.provider !== lastOurs.provider || lastHeader.model !== lastOurs.model) return;
+    trail.set(agent, [{ provider: lastOurs.provider, model: lastOurs.model }]);
+  };
 
   const continuable = (failure: FailureFacts): boolean => {
     if (!resolved.enabled) return false;
@@ -485,37 +537,52 @@ export function apply(ctx: Context, entry: Record<string, unknown> = {}): void {
     const base = await next();
     if (!resolved.enabled || resolved.fallbacks.length === 0) return base;
     const primary: FallbackRoute = { provider: base.provider, model: base.model };
-    // Home is resolved BEFORE firstSeen is recorded: otherwise the fallback
-    // poisons itself (firstSeen === primary → home can never differ).
-    const home = homeRoute(payload.agent, primary);
-    if (!firstSeen.has(payload.agent)) firstSeen.set(payload.agent, primary);
-    // Revert: only while the session still sits exactly where OUR walk put it
-    // (trail tail == primary). A manual picker choice diverges the trail and
-    // is never touched afterwards.
-    const walked = trail.get(payload.agent);
-    const trailLast = walked !== undefined && walked.length > 0 ? walked[walked.length - 1] : undefined;
-    if (revertDecision({
-      primary,
-      home,
-      trailLast,
-      homeOpen: breaker.isOpen(home.provider, home.model),
-    })) {
-      trail.delete(payload.agent);
-      console.warn(
-        '[dsh-failover-continue] %s: %s/%s off-home, reverting to %s/%s',
-        payload.agent.id, primary.provider, primary.model, home.provider, home.model,
-      );
-      notifySwitch(payload.agent, primary, home);
-      const { reasoningEffort, ...rest } = base as LlmCallConfig & { reasoningEffort?: unknown };
-      void reasoningEffort;
-      return { ...rest, provider: home.provider, model: home.model };
-    }
+    const list = currentFallbacks();
+    const pos = list.findIndex(
+      (route) => route.provider === primary.provider && route.model === primary.model,
+    );
     const entries = entriesOf(payload.agent);
     const key = attemptKey(payload.turn, payload.step);
     let attempt = entries.get(key);
     if (attempt === undefined) {
       attempt = { current: primary, swaps: 0, skip: new Set() };
       entries.set(key, attempt);
+    }
+    if (pos !== -1) {
+      // In-list primary: reconstruct our walk trail once per boot (survives
+      // restarts via the session log), then step UP toward higher priority.
+      if (!trailScanned.has(payload.agent)) {
+        trailScanned.add(payload.agent);
+        reconstructTrailFromLog(payload.agent);
+      }
+      const walked = trail.get(payload.agent);
+      const last = walked !== undefined && walked.length > 0 ? walked[walked.length - 1] : undefined;
+      const onTrail = last !== undefined
+        && last.provider === primary.provider && last.model === primary.model;
+      if (onTrail) {
+        const skipped = attempt.skip;
+        const up = stepUpIndex(pos, (index) => {
+          const candidate = list[index];
+          if (candidate === undefined) return false;
+          return !breaker.isOpen(candidate.provider, candidate.model)
+            && !skipped.has(modelKey(candidate.provider, candidate.model));
+        });
+        if (up >= 0) {
+          const target = list[up];
+          if (target !== undefined) {
+            trail.set(payload.agent, [...(walked ?? []), { provider: target.provider, model: target.model }]);
+            attempt.current = target;
+            console.warn(
+              '[dsh-failover-continue] %s: %s/%s stepping up to %s/%s (priority)',
+              payload.agent.id, primary.provider, primary.model, target.provider, target.model,
+            );
+            notifySwitch(payload.agent, primary, target);
+            const { reasoningEffort, ...rest } = base as LlmCallConfig & { reasoningEffort?: unknown };
+            void reasoningEffort;
+            return { ...rest, provider: target.provider, model: target.model };
+          }
+        }
+      }
     }
     const target = pickTarget(primary, attempt);
     attempt.current = target;
